@@ -4,7 +4,7 @@ import mongoose from "mongoose";
 import Price from "./models/price.js";
 import PlayerReports from "./models/playerReports.js";
 import playerRestrictions from "./seed/playerRestrictions.json" assert { type: "json" };
-
+import pLimit from "p-limit";
 let browser;
 
 if (process.env.NODE_ENV !== "production") {
@@ -85,20 +85,21 @@ async function blockUnwantedResources(page) {
 }
 
 // 💰 크롤링하여 가격 정보 수집
-async function playerPriceValue(data, Grade) {
-  let context;
+async function playerPriceValue(data, Grade, concurrency = 7) {
   let grades = Array.isArray(Grade) ? [...Grade] : [Grade];
+  const limit = pLimit(concurrency);
+  const results = [];
 
-  try {
-    await initBrowser();
-    context = await browser.newContext();
-    const results = [];
+  await initBrowser();
+  const context = await browser.newContext();
 
-    for (const player of data) {
-      if (playerRestrictions.includes(Number(player.id))) continue;
+  const tasks = data.map((player) =>
+    limit(async () => {
+      if (playerRestrictions.includes(Number(player.id))) return;
 
       const { id } = player;
       const url = `https://fconline.nexon.com/DataCenter/PlayerInfo?spid=${id}&n1Strong=1`;
+
       const page = await context.newPage();
       await blockUnwantedResources(page);
 
@@ -125,7 +126,7 @@ async function playerPriceValue(data, Grade) {
               `.selector_item.en_level${grade}:visible`,
               { timeout: 5000 }
             );
-            await page.waitForTimeout(300);
+            await page.waitForTimeout(100);
 
             const elements = await page.$$(`.selector_item.en_level${grade}`);
             for (const el of elements) {
@@ -135,7 +136,7 @@ async function playerPriceValue(data, Grade) {
               }
             }
 
-            await page.waitForTimeout(800);
+            await page.waitForTimeout(1200);
 
             await page.waitForFunction(
               () => {
@@ -163,13 +164,15 @@ async function playerPriceValue(data, Grade) {
       } finally {
         await page.close();
       }
-    }
+    })
+  );
 
-    return results;
-  } finally {
-    await context?.close();
-    await browser?.close();
-  }
+  await Promise.all(tasks);
+
+  await context.close();
+  await browser.close();
+
+  return results;
 }
 
 // 📦 DB 저장
