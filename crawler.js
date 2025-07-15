@@ -85,7 +85,7 @@ async function blockUnwantedResources(page) {
 }
 
 // 💰 크롤링하여 가격 정보 수집
-async function playerPriceValue(data, Grade, concurrency = 7) {
+async function playerPriceValue(data, Grade, concurrency = 10) {
   let grades = Array.isArray(Grade) ? [...Grade] : [Grade];
   const limit = pLimit(concurrency);
   const results = [];
@@ -98,71 +98,44 @@ async function playerPriceValue(data, Grade, concurrency = 7) {
       if (playerRestrictions.includes(Number(player.id))) return;
 
       const { id } = player;
-      const url = `https://fconline.nexon.com/DataCenter/PlayerInfo?spid=${id}&n1Strong=1`;
 
-      const page = await context.newPage();
-      await blockUnwantedResources(page);
+      for (let grade of grades) {
+        const url = `https://fconline.nexon.com/DataCenter/PlayerInfo?spid=${id}&n1Strong=${grade}`;
+        const page = await context.newPage();
+        await blockUnwantedResources(page);
 
-      try {
-        console.log(`🌍 Navigating to ${url}`);
-        await page.goto(url, { waitUntil: "domcontentloaded" });
+        try {
+          console.log(`🌍 Navigating to ${url}`);
+          await page.goto(url, { waitUntil: "domcontentloaded" });
 
-        await page.waitForFunction(
-          () => {
-            const el = document.querySelector(".txt strong");
-            return el && el.getAttribute("title")?.trim() !== "";
-          },
-          { timeout: 5000 }
-        );
+          await page.waitForFunction(
+            () => {
+              const element = document.querySelector(".txt strong");
+              return (
+                element &&
+                element.getAttribute("title") &&
+                element.getAttribute("title").trim() !== ""
+              );
+            },
+            { timeout: 80000 }
+          );
 
-        for (let grade of grades) {
-          try {
-            await page.waitForSelector(".en_selector_wrap .en_wrap", {
-              timeout: 5000,
-            });
-            await page.click(".en_selector_wrap .en_wrap");
+          let datacenterTitle = await page.evaluate(() => {
+            const element = document.querySelector(".txt strong").textContent;
+            return element;
+          });
 
-            await page.waitForSelector(
-              `.selector_item.en_level${grade}:visible`,
-              { timeout: 5000 }
-            );
-            await page.waitForTimeout(100);
+          results.push({
+            id: id,
+            prices: { grade, price: datacenterTitle },
+          });
 
-            const elements = await page.$$(`.selector_item.en_level${grade}`);
-            for (const el of elements) {
-              if (await el.isVisible()) {
-                await el.click();
-                break;
-              }
-            }
-
-            await page.waitForTimeout(1200);
-
-            await page.waitForFunction(
-              () => {
-                const el = document.querySelector(".txt strong");
-                return el && el.textContent.trim() !== "";
-              },
-              { timeout: 5000 }
-            );
-
-            const datacenterTitle = await page.evaluate(() => {
-              const el = document.querySelector(".txt strong");
-              return el ? el.textContent.trim() : null;
-            });
-
-            if (!datacenterTitle) continue;
-
-            console.log(`✔ ID ${id} / Grade ${grade} → ${datacenterTitle}`);
-            results.push({ id, prices: { grade, price: datacenterTitle } });
-          } catch (err) {
-            console.log(`⛔ ID ${id}, Grade ${grade} → 오류: ${err.message}`);
-          }
+          console.log(`✔ ID ${id} / Grade ${grade} → ${datacenterTitle}`);
+        } catch (err) {
+          console.error(`❌ Error for ID ${id}, Grade ${grade}:`, err.message);
+        } finally {
+          await page.close();
         }
-      } catch (err) {
-        console.error(`❌ Error for ID ${id}, Grade ${grades}:`, err.message);
-      } finally {
-        await page.close();
       }
     })
   );
@@ -257,20 +230,24 @@ async function playerSearch(selectedSeason = "", minOvr = 0) {
   });
 }
 
-// 🚀 메인 실행 함수
 async function main() {
   try {
-    const HR22_LIST = await playerSearch([261], 0);
-    const HR22_RESULTS = await playerPriceValue(
-      HR22_LIST,
+    // --------------------------------------   2012 KH--------------------------------------
+
+    const HR23_LIST = await playerSearch([281], 0); // playerSearch(시즌넘버, 최소오버롤)
+    let HR23_RESULTS = await playerPriceValue(
+      HR23_LIST,
       [1, 2, 3, 4, 5, 6, 7, 8]
-    );
-    await saveToDB(HR22_RESULTS);
+    ); // playerPriceValue(데이터 , 강화등급)
+    await saveToDB(HR23_RESULTS);
+
+    // -------------------------------------------------------------------------------------------------------------------------------
+
     console.log("✅ Crawling process completed.");
+    process.exit(0);
   } catch (error) {
     console.error("❌ Error in crawler:", error.message);
-  } finally {
-    process.exit(0);
+    process.exit(1);
   }
 }
 
